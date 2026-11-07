@@ -42,6 +42,7 @@ struct Params {
     float size2    = 0.5f;
     float rev3     = 0.0f;  // pogłos 3 (ciemna otchłań) — dostaje wyjście pogłosu 2
     float size3    = 0.7f;
+    float protect  = 0.7f;  // ochrona uszu: przyciemnia bzyczenie i pisk, ścisza długo za głośny dźwięk
 };
 
 struct Biquad {
@@ -166,6 +167,8 @@ public:
         for (auto& c : ch) {
             c.fb.assign((size_t)(sr * 0.1f) + 8, 0.f);
             c.rv.init(sr); c.rv2.init(sr); c.rv3.init(sr);
+            c.hfHp.highpass(sr, 3500.f, 0.7f);
+            c.guardShelf.highshelf(sr, 2800.f, 0.f);
             c.cd.init((size_t)(0.045f * sr) + 8);
             c.trk.lowpass(sr, 900.f, 0.7f);
             c.rng = (seed += 0x7F4A7C15u);
@@ -188,7 +191,7 @@ public:
         sm(smooth.revfb, target.revfb);   sm(smooth.chorus, target.chorus); sm(smooth.chRate, target.chRate);
         sm(smooth.soft, target.soft);     sm(smooth.swell, target.swell);   sm(smooth.body, target.body);
         sm(smooth.rev2, target.rev2);     sm(smooth.size2, target.size2);   sm(smooth.rev3, target.rev3);
-        sm(smooth.size3, target.size3);
+        sm(smooth.size3, target.size3);   sm(smooth.protect, target.protect);
         first = false;
         const Params& p = smooth;
 
@@ -405,8 +408,9 @@ public:
                 float y = v - s.dcX + 0.9995f * s.dcY; s.dcX = v; s.dcY = y;
                 y *= outG;
                 if (!std::isfinite(y)) { y = 0.f; s.resetFilters(); }
-                y = clampf(y, -2.f, 2.f);
-                x[i] = dry + p.mix * (y - dry);
+                y = clampf(y, -4.f, 4.f);
+                float o = dry + p.mix * (y - dry);
+                x[i] = protectTick(s, o, p.protect);
             }
         }
     }
@@ -416,6 +420,8 @@ private:
         Biquad inHp, pre, inter1, inter2, f1, f2, fbHp, crackBp, lowS, highS, post;
         Biquad trk, howlBp, sf1, sf2, sf3, sr1, sr2, sr3;
         Reverb rv, rv2, rv3;
+        Biquad hfHp, guardShelf;
+        float msAll = 0, msHf = 0, cutDb = 0, guardG = 1.f, limEnv = 0; uint32_t guardCnt = 0;
         Biquad softLp, bodyS, subLp; Delay cd;
         float sub = 1.f, envF = 0, envS = 0, swellG = 1.f, cph = 0; int sinceOn = 0;
         float envIn = 0, trackF = 110.f, bloom = 0, H = 2.f, revLast = 0, vib = 0, vph = 0;
@@ -427,6 +433,7 @@ private:
             for (Biquad* b : {&inHp, &pre, &inter1, &inter2, &f1, &f2, &fbHp, &crackBp, &lowS, &highS, &post}) b->reset();
             std::fill(fb.begin(), fb.end(), 0.f); env = 0; dcX = dcY = 0; octX = octY = 0;
             for (Biquad* b : {&trk, &howlBp, &sf1, &sf2, &sf3, &sr1, &sr2, &sr3}) b->reset();
+            hfHp.reset(); guardShelf.reset(); msAll = msHf = 0; cutDb = 0; guardG = 1.f; limEnv = 0;
             rv.clear(); rv2.clear(); rv3.clear(); revLast = 0; bloom = 0; cd.clear();
             for (Biquad* b : {&softLp, &bodyS, &subLp}) b->reset();
         }
@@ -443,6 +450,33 @@ private:
         float a = F[k][0] + (F[k + 1][0] - F[k][0]) * f, b = F[k][1] + (F[k + 1][1] - F[k][1]) * f;
         s.f1.bandpass(sr, a, 6.f);
         s.f2.bandpass(sr, b, 8.f);
+    }
+
+    // ochrona uszu: dynamiczne przyciemnianie góry + powolne ściszanie + limiter na wyjściu
+    float protectTick(Chan& s, float o, float prot) {
+        const float a300 = 1.f / (0.3f * sr), a50 = 1.f / (0.05f * sr);
+        s.msAll += (o * o - s.msAll) * a300;
+        float hf = s.hfHp.process(o);
+        s.msHf += (hf * hf - s.msHf) * a50;
+        if ((s.guardCnt++ & 63) == 0) {
+            const float rms = std::sqrt(s.msAll) + 1e-6f, hfr = std::sqrt(s.msHf);
+            const float ratio = hfr / rms;
+            float tgt = prot * (clampf((ratio - 0.35f) / 0.3f, 0.f, 1.f) * 18.f + clampf((hfr - 0.07f) / 0.15f, 0.f, 1.f) * 12.f);
+            tgt = std::min(tgt, 24.f);
+            const float dt = 64.f / sr;
+            s.cutDb += (tgt - s.cutDb) * (tgt > s.cutDb ? dt / 0.08f : dt / 0.8f);
+            s.guardShelf.highshelf(sr, 2800.f, -s.cutDb);
+            const float thr = 0.35f;
+            float gT = rms > thr ? std::pow(thr / rms, 0.8f) : 1.f;
+            gT = 1.f - prot * (1.f - gT);
+            s.guardG += (gT - s.guardG) * (gT < s.guardG ? dt / 1.2f : dt / 2.f);
+        }
+        float y = s.guardShelf.process(o) * s.guardG;
+        // limiter szczytowy: sufit -1 dBFS
+        const float ceil = 0.89f, a = std::fabs(y);
+        s.limEnv = a > s.limEnv ? a : s.limEnv + (a - s.limEnv) * (1.f / (0.12f * sr));
+        if (s.limEnv > ceil) y *= ceil / s.limEnv;
+        return ceil * std::tanh(y / ceil);
     }
 
     // co 64 próbki: formanty śpiewu, rezonatory na wysokości nuty, przeskoki harmonicznej wycia

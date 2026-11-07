@@ -22,3 +22,46 @@ jobs:
           path: |
             build/StonogaFX_artefacts/Release/VST3/
             build/StonogaFX_artefacts/Release/Standalone/
+      - name: Installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          $env:APPVER = "0.3.${{ github.run_number }}"
+          & $iscc installer\stonoga.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Zip (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist
+          ditto -c -k --keepParent "build/StonogaFX_artefacts/Release/VST3/Stonoga FX.vst3" "dist/StonogaFX-Mac-VST3.zip"
+          ditto -c -k --keepParent "build/StonogaFX_artefacts/Release/Standalone/Stonoga FX.app" "dist/StonogaFX-Mac-App.zip"
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ runner.os }}
+          path: dist/
+
+  release:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.3.${{ github.run_number }}
+          name: Stonoga FX 0.3.${{ github.run_number }}
+          make_latest: true
+          body: |
+            **Windows:** pobierz `StonogaFX-Setup.exe` i uruchom. Wtyczka trafi do `C:\Program Files\Common Files\VST3`, a wersja bez DAW do menu Start.
+            Windows może ostrzec, że aplikacja jest nieznana (instalator nie jest podpisany) — kliknij „Więcej informacji” → „Uruchom mimo to”.
+            **Mac:** `StonogaFX-Mac-VST3.zip` → rozpakuj do `~/Library/Audio/Plug-Ins/VST3/`.
+          files: dist/*

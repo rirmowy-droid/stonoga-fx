@@ -3,10 +3,11 @@
 Przester / fuzz do noise rocka (VST3 + wersja samodzielna) na Windows i Mac.
 
 ## Pobieranie
-Zakładka **Actions** → ostatni udany przebieg „Build Stonoga FX” → sekcja *Artifacts* → `StonogaFX-Windows`.
+**[Najnowsze wydanie](https://github.com/rirmowy-droid/stonoga-fx/releases/latest)** → `StonogaFX-Setup.exe` → uruchom.
 
-* `Stonoga FX.vst3` skopiuj do `C:\Program Files\Common Files\VST3\`
-* `Stonoga FX.exe` (Standalone) uruchamia efekt bez DAW — wybierz w ustawieniach interfejs audio z gitarą.
+* Wtyczka VST3 trafia do `C:\Program Files\Common Files\VST3\` — w DAW zrób ponowne skanowanie wtyczek.
+* „Stonoga FX (bez DAW)” w menu Start uruchamia efekt samodzielnie — wybierz w ustawieniach interfejs audio z gitarą.
+* Instalator nie jest podpisany, więc Windows może ostrzec: „Więcej informacji” → „Uruchom mimo to”.
 
 ## Pokrętła
 | | |
@@ -30,6 +31,7 @@ Zakładka **Actions** → ostatni udany przebieg „Build Stonoga FX” → sekc
 | **Chór** | oktawa i kwinta w pętli pogłosu — ogon unosi się w nieskończoność |
 | **Pętla pogłosu** | pogłos wraca do przesteru: samopodtrzymująca się ściana |
 | **Barwa** | ciemno ↔ jasno |
+| **Ochrona uszu** | gdy pojawia się bzyczenie lub pisk, płynnie przyciemnia górę; gdy dźwięk długo jest za głośny (np. rozpędzone sprzężenie), powoli ścisza; na wyjściu zawsze działa limiter −1 dB |
 | **Mix**, **Wyjście** | |
 
 Presety: Mięso, Zdychająca bateria, Maska nō, Rdza, Sprzężenie, Wycie, Chór umarłych, Utonięcie, Ciepły crunch, Shoegaze, Ściana mgły, Trzy katedry, Totalny rozpad.

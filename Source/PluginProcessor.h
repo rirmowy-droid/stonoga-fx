@@ -38,7 +38,7 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     juce::AudioProcessorValueTreeState apvts;
 
-    static constexpr int kNumParams = 28;
+    static constexpr int kNumParams = 29;
     static const char* paramId (int i);
 
 private:

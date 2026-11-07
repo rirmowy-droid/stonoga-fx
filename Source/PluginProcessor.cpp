@@ -29,6 +29,7 @@ static const ParamDef kDefs[StonogaProcessor::kNumParams] = {
     {"size2",    "Rozmiar 2",             &stonoga::Params::size2,    0.f, 1.f},
     {"rev3",     "Pogłos 3 (otchłań)",    &stonoga::Params::rev3,     0.f, 1.f},
     {"size3",    "Rozmiar 3",             &stonoga::Params::size3,    0.f, 1.f},
+    {"protect",  "Ochrona uszu",          &stonoga::Params::protect,  0.f, 1.f},
     {"output",   "Wyjście (dB)",          &stonoga::Params::outDb,  -40.f, 6.f},
 };
 

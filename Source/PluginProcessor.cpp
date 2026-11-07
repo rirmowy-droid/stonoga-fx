@@ -97,7 +97,7 @@ void StonogaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     juce::dsp::AudioBlock<float> block (buffer);
     auto up = oversampling->processSamplesUp (block);
     std::array<float*, 8> ptrs {};
-    const int nch = (int) juce::jmin<size_t> (up.getNumChannels(), ptrs.size());
+    const int nch = (int) std::min<size_t> (up.getNumChannels(), ptrs.size());
     for (int c = 0; c < nch; ++c)
         ptrs[(size_t) c] = up.getChannelPointer ((size_t) c);
     engine.process (ptrs.data(), nch, (int) up.getNumSamples(), p);

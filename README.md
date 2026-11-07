@@ -19,9 +19,14 @@ Zakładka **Actions** → ostatni udany przebieg „Build Stonoga FX” → sekc
 | **Rdza** | bitcrush i decymacja — metaliczne, aliasujące tony |
 | **Trzaski** | trzaski zależne od siły gry |
 | **Sprzężenie** + **Czas** | wewnętrzne sprzężenie zwrotne; od ~40% samo piszczy |
+| **Wycie** | sprzężenie jak gitara przy wzmacniaczu: dostraja się do granej nuty, narasta przy wybrzmiewaniu i skacze po alikwotach; wyciszenie strun je gasi |
+| **Pogłos** + **Rozmiar** | pogłos od małego pokoju do 20‑sekundowej katedry |
+| **Śpiew** | ogon pogłosu śpiewa: filtry samogłosek + rezonans na wysokości granej nuty |
+| **Chór** | oktawa i kwinta w pętli pogłosu — ogon unosi się w nieskończoność |
+| **Pętla pogłosu** | pogłos wraca do przesteru: samopodtrzymująca się ściana |
 | **Barwa** | ciemno ↔ jasno |
 | **Mix**, **Wyjście** | |
 
-Presety: Mięso, Zdychająca bateria, Maska nō, Rdza, Sprzężenie, Totalny rozpad.
+Presety: Mięso, Zdychająca bateria, Maska nō, Rdza, Sprzężenie, Wycie, Chór umarłych, Utonięcie, Totalny rozpad.
 
 Uwaga: przy dużym sprzężeniu efekt może grać sam — zacznij od niskiej głośności.

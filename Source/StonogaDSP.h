@@ -27,6 +27,12 @@ struct Params {
     float tone     = 0.5f;  // barwa: ciemno <-> jasno
     float mix      = 1.0f;  // dry/wet
     float outDb    = -10.f; // wyjście
+    float howl     = 0.0f;  // wycie: sprzężenie dostrojone do granej nuty, narasta przy wybrzmiewaniu
+    float reverb   = 0.0f;  // ilość pogłosu
+    float size     = 0.5f;  // czas pogłosu 0.5..20 s
+    float sing     = 0.0f;  // śpiew: formanty + rezonans na wysokości nuty w ogonie
+    float choir    = 0.0f;  // chór: oktawa i kwinta w pętli pogłosu (narasta bez końca)
+    float revfb    = 0.0f;  // pętla: pogłos wraca do przesteru
 };
 
 struct Biquad {
@@ -64,6 +70,84 @@ struct Biquad {
     }
 };
 
+struct Delay {
+    std::vector<float> b; size_t w = 0;
+    void init(size_t n) { b.assign(n, 0.f); w = 0; }
+    inline void push(float x) { b[w] = x; if (++w == b.size()) w = 0; }
+    inline float tap(float d) const {
+        float rp = (float)w - d; const float n = (float)b.size();
+        while (rp < 0) rp += n;
+        size_t i0 = (size_t)rp; if (i0 >= b.size()) i0 -= b.size();
+        size_t i1 = i0 + 1; if (i1 == b.size()) i1 = 0;
+        float fr = rp - (float)(size_t)rp;
+        return b[i0] + (b[i1] - b[i0]) * fr;
+    }
+    void clear() { std::fill(b.begin(), b.end(), 0.f); }
+};
+
+inline const float kLen[8] = {29.7f, 37.1f, 41.1f, 43.7f, 53.3f, 59.9f, 67.7f, 79.3f}; // ms
+
+struct Reverb {
+    Delay line[8], pre, ap1, ap2, sh;
+    float len[8] {}, g[8] {}, lp[8] {};
+    float ap1M = 0, ap2M = 0, preM = 0, lfo = 0, ph1 = 0, ph2 = 0.5f, ph3 = 0, ph4 = 0.5f, shimFeed = 0, sr = 48000;
+    void init(float rate) {
+        sr = rate;
+        for (auto& l : line) l.init((size_t)(0.0793f * 1.6f * sr + 0.004f * sr + 0.002f * sr) + 16);
+        preM = 0.018f * sr; ap1M = 0.0047f * sr; ap2M = 0.0113f * sr;
+        pre.init((size_t)preM + 8); ap1.init((size_t)ap1M + 8); ap2.init((size_t)ap2M + 8);
+        sh.init((size_t)(0.08f * sr) + 16);
+    }
+    void clear() { for (auto& l : line) l.clear(); pre.clear(); ap1.clear(); ap2.clear(); sh.clear(); for (float& v : lp) v = 0; shimFeed = 0; }
+};
+
+inline float allpass(Delay& d, float x, float M, float gg) {
+    float dv = d.tap(M);
+    float y = -gg * x + dv;
+    d.push(x + gg * y);
+    return y;
+}
+
+// jeden krok pogłosu FDN 8x8 (Householder) z chórem (oktawa + kwinta w pętli)
+inline float reverbTick(Reverb& r, float x, float dampC, float choir, float win) {
+    r.pre.push(x + r.shimFeed);
+    float in = r.pre.tap(r.preM);
+    in = allpass(r.ap1, in, r.ap1M, 0.62f);
+    in = allpass(r.ap2, in, r.ap2M, 0.58f);
+    r.lfo += 2.f * kPi * 0.4f / r.sr; if (r.lfo > 2.f * kPi) r.lfo -= 2.f * kPi;
+    float v[8], sum = 0;
+    const float md = 0.0012f * r.sr;
+    for (int k = 0; k < 8; ++k) {
+        float d = r.len[k] + (k < 4 ? md * (1.f + std::sin(r.lfo + 1.7f * (float)k)) : 0.f) + 2.f;
+        float t = r.line[k].tap(d);
+        r.lp[k] += dampC * (t - r.lp[k]);
+        v[k] = r.lp[k] * r.g[k];
+        sum += v[k];
+    }
+    sum *= 0.25f;
+    static const float sg[8] = {1, -1, 1, -1, -1, 1, -1, 1};
+    float out = 0;
+    for (int k = 0; k < 8; ++k) {
+        r.line[k].push(v[k] - sum + in * 0.35f * sg[k]);
+        out += v[k] * ((k & 1) ? -0.35f : 0.35f);
+    }
+    // chór: przesuwanie wysokości ogona (oktawa i kwinta), zawracane do pętli
+    float shOut = 0;
+    if (choir > 0.001f) {
+        r.sh.push(out);
+        auto head = [&](float& ph, float ratio) {
+            ph += (ratio - 1.f) / win; if (ph >= 1.f) ph -= 1.f;
+            float d = win * (1.f - ph) + 2.f;
+            return r.sh.tap(d) * std::sin(kPi * ph);
+        };
+        float oct = head(r.ph1, 2.f) + head(r.ph2, 2.f);
+        float fif = head(r.ph3, 1.5f) + head(r.ph4, 1.5f);
+        shOut = oct * 0.55f + fif * 0.45f;
+        r.shimFeed = shOut * choir * 0.5f;
+    } else r.shimFeed = 0;
+    return out + shOut * choir * 0.6f;
+}
+
 class Engine {
 public:
     void prepare(double sampleRate, int numChannels) {
@@ -72,6 +156,8 @@ public:
         uint32_t seed = 0x9E3779B9u;
         for (auto& c : ch) {
             c.fb.assign((size_t)(sr * 0.1f) + 8, 0.f);
+            c.rv.init(sr);
+            c.trk.lowpass(sr, 900.f, 0.7f);
             c.rng = (seed += 0x7F4A7C15u);
         }
         smooth = Params{};
@@ -87,7 +173,9 @@ public:
         sm(smooth.octave, target.octave); sm(smooth.mask, target.mask);     sm(smooth.vowel, target.vowel);
         sm(smooth.rust, target.rust);     sm(smooth.crackle, target.crackle); sm(smooth.feedback, target.feedback);
         sm(smooth.fbTime, target.fbTime); sm(smooth.tone, target.tone);     sm(smooth.mix, target.mix);
-        sm(smooth.outDb, target.outDb);
+        sm(smooth.outDb, target.outDb);   sm(smooth.howl, target.howl);     sm(smooth.reverb, target.reverb);
+        sm(smooth.size, target.size);     sm(smooth.sing, target.sing);     sm(smooth.choir, target.choir);
+        sm(smooth.revfb, target.revfb);
         first = false;
         const Params& p = smooth;
 
@@ -110,6 +198,12 @@ public:
         const float outG = std::pow(10.f, p.outDb / 20.f);
         const float atk = 1.f - std::exp(-1.f / (0.001f * sr));
         const float rel = 1.f - std::exp(-1.f / (0.09f * sr));
+        const float rt60 = 0.5f * std::pow(40.f, p.size);
+        const float lineScale = 0.7f + p.size * 0.9f;
+        const float dampC = 1.f - std::exp(-2.f * kPi * (2500.f + 5000.f * (1.f - p.size * 0.6f)) / sr);
+        const bool revOn = p.reverb > 0.001f || p.revfb > 0.001f;
+        const float shWin = 0.07f * sr;
+        const float sixtyFour = 64.f / sr;
         const int chatterN = std::max(1, (int)(sr / (1500.f + 5000.f * (1.f - p.gate))));
 
         for (int c = 0; c < std::min(numCh, (int)ch.size()); ++c) {
@@ -126,11 +220,39 @@ public:
             s.highS.highshelf(sr, 900.f, tilt);
             s.post.lowpass(sr, 7000.f + 9000.f * p.tone, 0.7f);
 
+            if (revOn) for (int k = 0; k < 8; ++k) { s.rv.len[k] = kLen[k] * lineScale * 0.001f * sr + (float)c * 0.0017f * sr; s.rv.g[k] = std::pow(10.f, -3.f * s.rv.len[k] / (rt60 * sr)); }
             float* x = io[c];
             const size_t N = s.fb.size();
             for (int i = 0; i < n; ++i) {
                 const float dry = x[i];
                 float v = s.inHp.process(dry);
+
+                // śledzenie wysokości nuty (przejścia przez zero) i obwiednia wejścia
+                {
+                    float t = s.trk.process(v);
+                    float ai = std::fabs(v); s.envIn += (ai > s.envIn ? atk : rel) * (ai - s.envIn);
+                    s.sinceX++;
+                    const float hy = 0.002f + s.envIn * 0.15f;
+                    if (s.zc <= 0 && t > hy) {
+                        s.zc = 1;
+                        if (s.sinceX > (int)(sr / 1300.f) && s.sinceX < (int)(sr / 50.f)) s.trackF += (sr / (float)s.sinceX - s.trackF) * 0.25f;
+                        s.sinceX = 0;
+                    } else if (s.zc > 0 && t < -hy) s.zc = -1;
+                    s.bloom = clampf(s.bloom + (s.envIn > 0.006f ? 1.f / (1.3f * sr) : -1.f / (0.45f * sr)), 0.f, 1.f);
+                }
+                if ((s.slowCnt++ & 63) == 0) slowUpdate(s, p, sixtyFour);
+
+                // wycie: pętla o długości okresu nuty / harmoniczna
+                if (p.howl > 0.001f && s.bloom > 0.f) {
+                    float d = clampf(sr / (s.trackF * s.H), 4.f, (float)N - 4.f);
+                    float rp = (float)s.fbPos - d; while (rp < 0) rp += (float)N;
+                    size_t i0 = (size_t)rp; float fr = rp - (float)i0; if (i0 >= N) i0 -= N;
+                    float h = s.fb[i0] + (s.fb[(i0 + 1) % N] - s.fb[i0]) * fr;
+                    h = s.howlBp.process(h);
+                    v += p.howl * 1.6f * s.bloom * std::tanh(h * 2.5f);
+                }
+                // pętla pogłosu
+                if (p.revfb > 0.001f) v += p.revfb * 1.3f * std::tanh(s.revLast * 1.5f);
 
                 // sprzężenie zwrotne
                 if (fbAmt > 0.001f) {
@@ -204,6 +326,20 @@ public:
                 v = s.lowS.process(v);
                 v = s.highS.process(v);
                 v = s.post.process(v);
+                // śpiewający pogłos
+                if (revOn) {
+                    float tail = reverbTick(s.rv, v * 0.5f, dampC, p.choir, shWin);
+                    float sg = tail;
+                    if (p.sing > 0.001f) {
+                        float f = s.sf1.process(tail) * 3.f + s.sf2.process(tail) * 2.f + s.sf3.process(tail) * 0.8f;
+                        f += (s.sr1.process(tail) + s.sr2.process(tail) * 0.7f + s.sr3.process(tail) * 0.5f) * 1.6f;
+                        s.vib += 2.f * kPi * 5.4f / sr; if (s.vib > 2.f * kPi) s.vib -= 2.f * kPi;
+                        f *= 1.f + 0.18f * std::sin(s.vib);
+                        sg = tail + p.sing * (f - tail);
+                    }
+                    s.revLast = sg;
+                    v += p.reverb * 1.4f * sg;
+                }
                 // DC
                 float y = v - s.dcX + 0.9995f * s.dcY; s.dcX = v; s.dcY = y;
                 y *= outG;
@@ -217,12 +353,18 @@ public:
 private:
     struct Chan {
         Biquad inHp, pre, inter1, inter2, f1, f2, fbHp, crackBp, lowS, highS, post;
+        Biquad trk, howlBp, sf1, sf2, sf3, sr1, sr2, sr3;
+        Reverb rv;
+        float envIn = 0, trackF = 110.f, bloom = 0, H = 2.f, revLast = 0, vib = 0, vph = 0;
+        int zc = 0, sinceX = 0; uint32_t slowCnt = 0;
         std::vector<float> fb; size_t fbPos = 0;
         float env = 0, gateG = 1, gateT = 1, holdV = 0, octX = 0, octY = 0, dcX = 0, dcY = 0;
         int chat = 0, holdCnt = 0; uint32_t vowelCnt = 0, rng = 1;
         void resetFilters() {
             for (Biquad* b : {&inHp, &pre, &inter1, &inter2, &f1, &f2, &fbHp, &crackBp, &lowS, &highS, &post}) b->reset();
             std::fill(fb.begin(), fb.end(), 0.f); env = 0; dcX = dcY = 0; octX = octY = 0;
+            for (Biquad* b : {&trk, &howlBp, &sf1, &sf2, &sf3, &sr1, &sr2, &sr3}) b->reset();
+            rv.clear(); revLast = 0; bloom = 0;
         }
     };
 
@@ -237,6 +379,29 @@ private:
         float a = F[k][0] + (F[k + 1][0] - F[k][0]) * f, b = F[k][1] + (F[k + 1][1] - F[k][1]) * f;
         s.f1.bandpass(sr, a, 6.f);
         s.f2.bandpass(sr, b, 8.f);
+    }
+
+    // co 64 próbki: formanty śpiewu, rezonatory na wysokości nuty, przeskoki harmonicznej wycia
+    void slowUpdate(Chan& s, const Params& p, float dtSlow) {
+        if (p.sing > 0.001f && (p.reverb > 0.001f || p.revfb > 0.001f)) {
+            s.vph += 2.f * kPi * 0.09f * dtSlow; if (s.vph > 2.f * kPi) s.vph -= 2.f * kPi;
+            float v = clampf(0.5f + 0.42f * std::sin(s.vph) + 0.12f * std::sin(s.vph * 2.7f + 1.f), 0.f, 1.f);
+            static const float F[5][2] = {{350, 700}, {500, 900}, {800, 1150}, {500, 1750}, {300, 2300}};
+            float t = v * 4.f; int k = std::min(3, (int)t); float f = t - (float)k;
+            s.sf1.bandpass(sr, F[k][0] + (F[k + 1][0] - F[k][0]) * f, 7.f);
+            s.sf2.bandpass(sr, F[k][1] + (F[k + 1][1] - F[k][1]) * f, 9.f);
+            s.sf3.bandpass(sr, 2500.f + 400.f * v, 10.f);
+            s.sr1.bandpass(sr, s.trackF, 25.f);
+            s.sr2.bandpass(sr, s.trackF * 2.f, 25.f);
+            s.sr3.bandpass(sr, s.trackF * 3.f, 25.f);
+        }
+        if (p.howl > 0.001f) {
+            if (s.bloom > 0.95f && rnd(s) < dtSlow / 2.2f) {
+                static const float Hs[5] = {1.5f, 2.f, 3.f, 4.f, 5.f};
+                s.H = Hs[(int)(rnd(s) * 5.f) % 5];
+            }
+            s.howlBp.bandpass(sr, clampf(s.trackF * s.H, 80.f, 5000.f), 3.f);
+        }
     }
 
     float sr = 192000.f;

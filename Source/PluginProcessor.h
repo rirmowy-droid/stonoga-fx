@@ -24,7 +24,7 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.3; }
+    double getTailLengthSeconds() const override { return 20.0; }
 
     int getNumPrograms() override { return stonoga::kNumPresets; }
     int getCurrentProgram() override { return currentProgram; }
@@ -38,8 +38,8 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     juce::AudioProcessorValueTreeState apvts;
 
-    static constexpr int kNumParams = 13;
-    static const std::array<const char*, kNumParams> kIds;
+    static constexpr int kNumParams = 19;
+    static const char* paramId (int i);
 
 private:
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;

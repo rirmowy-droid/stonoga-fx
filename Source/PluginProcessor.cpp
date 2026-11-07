@@ -1,34 +1,39 @@
 #include "PluginProcessor.h"
 
-const std::array<const char*, StonogaProcessor::kNumParams> StonogaProcessor::kIds {
-    "drive", "starve", "gate", "octave", "mask", "vowel", "rust", "crackle", "feedback", "fbtime", "tone", "mix", "output"
+struct ParamDef { const char* id; const char* name; float stonoga::Params::* mem; float lo, hi; };
+static const ParamDef kDefs[StonogaProcessor::kNumParams] = {
+    {"drive",    "Przester",              &stonoga::Params::drive,    0.f, 1.f},
+    {"starve",   "Głód baterii",          &stonoga::Params::starve,   0.f, 1.f},
+    {"gate",     "Rozpad (bramka)",       &stonoga::Params::gate,     0.f, 1.f},
+    {"octave",   "Oktawa",                &stonoga::Params::octave,   0.f, 1.f},
+    {"rust",     "Rdza",                  &stonoga::Params::rust,     0.f, 1.f},
+    {"crackle",  "Trzaski",               &stonoga::Params::crackle,  0.f, 1.f},
+    {"tone",     "Barwa",                 &stonoga::Params::tone,     0.f, 1.f},
+    {"mask",     "Maska",                 &stonoga::Params::mask,     0.f, 1.f},
+    {"vowel",    "Samogłoska u-o-a-e-i",  &stonoga::Params::vowel,    0.f, 1.f},
+    {"feedback", "Sprzężenie",            &stonoga::Params::feedback, 0.f, 1.f},
+    {"fbtime",   "Czas sprzężenia",       &stonoga::Params::fbTime,   0.f, 1.f},
+    {"howl",     "Wycie",                 &stonoga::Params::howl,     0.f, 1.f},
+    {"revfb",    "Pętla pogłosu",         &stonoga::Params::revfb,    0.f, 1.f},
+    {"mix",      "Mix",                   &stonoga::Params::mix,      0.f, 1.f},
+    {"reverb",   "Pogłos",                &stonoga::Params::reverb,   0.f, 1.f},
+    {"size",     "Rozmiar pogłosu",       &stonoga::Params::size,     0.f, 1.f},
+    {"sing",     "Śpiew",                 &stonoga::Params::sing,     0.f, 1.f},
+    {"choir",    "Chór",                  &stonoga::Params::choir,    0.f, 1.f},
+    {"output",   "Wyjście (dB)",          &stonoga::Params::outDb,  -40.f, 6.f},
 };
+
+const char* StonogaProcessor::paramId (int i) { return kDefs[i].id; }
 
 static juce::String pl (const char* s) { return juce::String::fromUTF8 (s); }
 
 juce::AudioProcessorValueTreeState::ParameterLayout StonogaProcessor::createLayout()
 {
-    using P = juce::AudioParameterFloat;
-    using R = juce::NormalisableRange<float>;
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> v;
     const stonoga::Params d = stonoga::kPresets[0].p;
-    auto add01 = [&] (const char* id, const char* name, float def)
-    {
-        v.push_back (std::make_unique<P> (juce::ParameterID { id, 1 }, pl (name), R (0.f, 1.f), def));
-    };
-    add01 ("drive",    "Przester",          d.drive);
-    add01 ("starve",   "Głód baterii",      d.starve);
-    add01 ("gate",     "Rozpad (bramka)",   d.gate);
-    add01 ("octave",   "Oktawa",            d.octave);
-    add01 ("mask",     "Maska",             d.mask);
-    add01 ("vowel",    "Samogłoska u-o-a-e-i", d.vowel);
-    add01 ("rust",     "Rdza",              d.rust);
-    add01 ("crackle",  "Trzaski",           d.crackle);
-    add01 ("feedback", "Sprzężenie",        d.feedback);
-    add01 ("fbtime",   "Czas sprzężenia",   d.fbTime);
-    add01 ("tone",     "Barwa",             d.tone);
-    add01 ("mix",      "Mix",               d.mix);
-    v.push_back (std::make_unique<P> (juce::ParameterID { "output", 1 }, pl ("Wyjście (dB)"), R (-40.f, 6.f, 0.1f), d.outDb));
+    for (const auto& def : kDefs)
+        v.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { def.id, 1 }, pl (def.name),
+            juce::NormalisableRange<float> (def.lo, def.hi, def.hi > 1.f ? 0.1f : 0.f), d.*(def.mem)));
     return { v.begin(), v.end() };
 }
 
@@ -39,7 +44,7 @@ StonogaProcessor::StonogaProcessor()
       apvts (*this, nullptr, "STONOGA", createLayout())
 {
     for (int i = 0; i < kNumParams; ++i)
-        params[(size_t) i] = apvts.getRawParameterValue (kIds[(size_t) i]);
+        params[(size_t) i] = apvts.getRawParameterValue (kDefs[i].id);
 }
 
 bool StonogaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -77,9 +82,8 @@ void StonogaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         return;
 
     stonoga::Params p;
-    auto g = [this] (int i) { return params[(size_t) i]->load(); };
-    p.drive = g (0); p.starve = g (1); p.gate = g (2); p.octave = g (3); p.mask = g (4); p.vowel = g (5);
-    p.rust = g (6); p.crackle = g (7); p.feedback = g (8); p.fbTime = g (9); p.tone = g (10); p.mix = g (11); p.outDb = g (12);
+    for (int i = 0; i < kNumParams; ++i)
+        p.*(kDefs[i].mem) = params[(size_t) i]->load();
 
     juce::dsp::AudioBlock<float> block (buffer);
     auto up = oversampling->processSamplesUp (block);
@@ -97,11 +101,9 @@ void StonogaProcessor::setCurrentProgram (int index)
         return;
     currentProgram = index;
     const auto& p = stonoga::kPresets[index].p;
-    const float vals[kNumParams] = { p.drive, p.starve, p.gate, p.octave, p.mask, p.vowel, p.rust,
-                                     p.crackle, p.feedback, p.fbTime, p.tone, p.mix, p.outDb };
     for (int i = 0; i < kNumParams; ++i)
-        if (auto* prm = apvts.getParameter (kIds[(size_t) i]))
-            prm->setValueNotifyingHost (prm->convertTo0to1 (vals[i]));
+        if (auto* prm = apvts.getParameter (kDefs[i].id))
+            prm->setValueNotifyingHost (prm->convertTo0to1 (p.*(kDefs[i].mem)));
 }
 
 const juce::String StonogaProcessor::getProgramName (int index)
@@ -158,19 +160,19 @@ public:
             s->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 18);
             addAndMakeVisible (s);
             auto* l = labels.add (new juce::Label());
-            if (auto* prm = p.apvts.getParameter (StonogaProcessor::kIds[(size_t) i]))
+            if (auto* prm = p.apvts.getParameter (StonogaProcessor::paramId (i)))
                 l->setText (prm->getName (40), juce::dontSendNotification);
             l->setJustificationType (juce::Justification::centred);
             l->setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
             addAndMakeVisible (l);
-            attachments.add (new juce::AudioProcessorValueTreeState::SliderAttachment (p.apvts, StonogaProcessor::kIds[(size_t) i], *s));
+            attachments.add (new juce::AudioProcessorValueTreeState::SliderAttachment (p.apvts, StonogaProcessor::paramId (i), *s));
         }
         for (int i = 0; i < stonoga::kNumPresets; ++i)
             presets.addItem (p.getProgramName (i), i + 1);
         presets.setTextWhenNothingSelected (juce::String::fromUTF8 ("Presety…"));
         presets.onChange = [this] { const int id = presets.getSelectedId(); if (id > 0) proc.setCurrentProgram (id - 1); };
         addAndMakeVisible (presets);
-        setSize (760, 470);
+        setSize (760, 640);
     }
     ~Editor() override { setLookAndFeel (nullptr); }
 
@@ -201,7 +203,7 @@ public:
         for (int i = 0; i < sliders.size(); ++i)
         {
             const int row = i / cols, col = i % cols;
-            const int x = x0 + col * w + (row == 1 ? w / 2 : 0), y = y0 + row * h;
+            const int x = x0 + col * w + (row == 2 ? w : 0), y = y0 + row * h;
             labels[i]->setBounds (x - 4, y, w + 8, 34);
             sliders[i]->setBounds (x, y + 30, w, h - 40);
         }

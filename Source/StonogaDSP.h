@@ -33,6 +33,15 @@ struct Params {
     float sing     = 0.0f;  // śpiew: formanty + rezonans na wysokości nuty w ogonie
     float choir    = 0.0f;  // chór: oktawa i kwinta w pętli pogłosu (narasta bez końca)
     float revfb    = 0.0f;  // pętla: pogłos wraca do przesteru
+    float chorus   = 0.0f;  // chorus (ilość)
+    float chRate   = 0.3f;  // tempo chorusa 0.1..4 Hz
+    float soft     = 0.0f;  // miękkość: ciepły overdrive zamiast kaskadowego fuzzu
+    float swell    = 0.0f;  // mgła: nuty narastają (shoegaze)
+    float body     = 0.0f;  // pełnia: dół + podoktawa
+    float rev2     = 0.0f;  // pogłos 2 (jasny) — dostaje wyjście pogłosu 1
+    float size2    = 0.5f;
+    float rev3     = 0.0f;  // pogłos 3 (ciemna otchłań) — dostaje wyjście pogłosu 2
+    float size3    = 0.7f;
 };
 
 struct Biquad {
@@ -93,7 +102,7 @@ struct Reverb {
     float ap1M = 0, ap2M = 0, preM = 0, lfo = 0, ph1 = 0, ph2 = 0.5f, ph3 = 0, ph4 = 0.5f, shimFeed = 0, sr = 48000;
     void init(float rate) {
         sr = rate;
-        for (auto& l : line) l.init((size_t)(0.0793f * 1.6f * sr + 0.004f * sr + 0.002f * sr) + 16);
+        for (auto& l : line) l.init((size_t)(0.0793f * 2.0f * sr + 0.012f * sr) + 16);
         preM = 0.018f * sr; ap1M = 0.0047f * sr; ap2M = 0.0113f * sr;
         pre.init((size_t)preM + 8); ap1.init((size_t)ap1M + 8); ap2.init((size_t)ap2M + 8);
         sh.init((size_t)(0.08f * sr) + 16);
@@ -156,7 +165,8 @@ public:
         uint32_t seed = 0x9E3779B9u;
         for (auto& c : ch) {
             c.fb.assign((size_t)(sr * 0.1f) + 8, 0.f);
-            c.rv.init(sr);
+            c.rv.init(sr); c.rv2.init(sr); c.rv3.init(sr);
+            c.cd.init((size_t)(0.045f * sr) + 8);
             c.trk.lowpass(sr, 900.f, 0.7f);
             c.rng = (seed += 0x7F4A7C15u);
         }
@@ -175,7 +185,10 @@ public:
         sm(smooth.fbTime, target.fbTime); sm(smooth.tone, target.tone);     sm(smooth.mix, target.mix);
         sm(smooth.outDb, target.outDb);   sm(smooth.howl, target.howl);     sm(smooth.reverb, target.reverb);
         sm(smooth.size, target.size);     sm(smooth.sing, target.sing);     sm(smooth.choir, target.choir);
-        sm(smooth.revfb, target.revfb);
+        sm(smooth.revfb, target.revfb);   sm(smooth.chorus, target.chorus); sm(smooth.chRate, target.chRate);
+        sm(smooth.soft, target.soft);     sm(smooth.swell, target.swell);   sm(smooth.body, target.body);
+        sm(smooth.rev2, target.rev2);     sm(smooth.size2, target.size2);   sm(smooth.rev3, target.rev3);
+        sm(smooth.size3, target.size3);
         first = false;
         const Params& p = smooth;
 
@@ -186,7 +199,11 @@ public:
         const float rail = 1.f - 0.82f * p.starve;
         const float bias = p.starve * 0.5f;
         const float makeup = 1.f / (rail * (1.f + 0.6f * p.starve));
-        const float fold = clampf((p.drive - 0.7f) / 0.3f, 0.f, 1.f);
+        const float fold = clampf((p.drive - 0.7f) / 0.3f, 0.f, 1.f) * (1.f - p.soft);
+        const float gs = std::pow(10.f, (3.f + p.drive * 38.f) / 20.f);
+        const float swellK = 1.f / ((0.03f + p.swell * 0.75f) * sr);
+        const float chHz = 0.1f + p.chRate * p.chRate * 3.9f;
+        const float msS = 0.001f * sr;
         const float gateThr = std::max(p.gate * 0.06f, p.starve * p.starve * 0.025f);
         const bool gateOn = gateThr > 1e-5f;
         const int fbDelay = std::max(1, (int)(sr * (0.001f + p.fbTime * 0.079f)));
@@ -202,6 +219,9 @@ public:
         const float lineScale = 0.7f + p.size * 0.9f;
         const float dampC = 1.f - std::exp(-2.f * kPi * (2500.f + 5000.f * (1.f - p.size * 0.6f)) / sr);
         const bool revOn = p.reverb > 0.001f || p.revfb > 0.001f;
+        const bool rev2On = p.rev2 > 0.001f, rev3On = p.rev3 > 0.001f;
+        const float rt2 = 0.4f * std::pow(30.f, p.size2), rt3 = 0.8f * std::pow(40.f, p.size3);
+        const float damp2 = 1.f - std::exp(-2.f * kPi * 9000.f / sr), damp3 = 1.f - std::exp(-2.f * kPi * (1400.f + 1600.f * (1.f - p.size3)) / sr);
         const float shWin = 0.07f * sr;
         const float sixtyFour = 64.f / sr;
         const int chatterN = std::max(1, (int)(sr / (1500.f + 5000.f * (1.f - p.gate))));
@@ -219,7 +239,12 @@ public:
             s.lowS.lowshelf(sr, 650.f, -tilt);
             s.highS.highshelf(sr, 900.f, tilt);
             s.post.lowpass(sr, 7000.f + 9000.f * p.tone, 0.7f);
+            s.softLp.lowpass(sr, 3800.f + 3000.f * p.tone, 0.6f);
+            s.bodyS.lowshelf(sr, 170.f, p.body * 9.f);
+            s.subLp.lowpass(sr, 260.f, 0.7f);
 
+            if (rev2On) for (int k = 0; k < 8; ++k) { s.rv2.len[k] = kLen[k] * 1.13f * (0.6f + p.size2 * 0.9f) * 0.001f * sr + (float)c * 0.0023f * sr; s.rv2.g[k] = std::pow(10.f, -3.f * s.rv2.len[k] / (rt2 * sr)); }
+            if (rev3On) for (int k = 0; k < 8; ++k) { s.rv3.len[k] = kLen[k] * 0.87f * (0.9f + p.size3 * 0.8f) * 0.001f * sr + (float)c * 0.0031f * sr; s.rv3.g[k] = std::pow(10.f, -3.f * s.rv3.len[k] / (rt3 * sr)); }
             if (revOn) for (int k = 0; k < 8; ++k) { s.rv.len[k] = kLen[k] * lineScale * 0.001f * sr + (float)c * 0.0017f * sr; s.rv.g[k] = std::pow(10.f, -3.f * s.rv.len[k] / (rt60 * sr)); }
             float* x = io[c];
             const size_t N = s.fb.size();
@@ -237,7 +262,14 @@ public:
                         s.zc = 1;
                         if (s.sinceX > (int)(sr / 1300.f) && s.sinceX < (int)(sr / 50.f)) s.trackF += (sr / (float)s.sinceX - s.trackF) * 0.25f;
                         s.sinceX = 0;
+                        s.sub = -s.sub;
                     } else if (s.zc > 0 && t < -hy) s.zc = -1;
+                    // nowa nuta -> mgła zaczyna narastać od zera
+                    s.envF += (ai - s.envF) * (ai > s.envF ? 0.02f * 48000.f / sr : 0.0015f * 48000.f / sr);
+                    s.envS += (ai - s.envS) * (0.00012f * 48000.f / sr);
+                    s.sinceOn++;
+                    if (s.envF > 0.008f && s.envF > s.envS * 1.9f && s.sinceOn > (int)(0.3f * sr)) { s.swellG = std::min(s.swellG, 0.12f + 0.6f * clampf(s.envS * 6.f, 0.f, 1.f)); s.sinceOn = 0; }
+                    s.swellG += (1.f - s.swellG) * swellK;
                     s.bloom = clampf(s.bloom + (s.envIn > 0.006f ? 1.f / (1.3f * sr) : -1.f / (0.45f * sr)), 0.f, 1.f);
                 }
                 if ((s.slowCnt++ & 63) == 0) slowUpdate(s, p, sixtyFour);
@@ -270,6 +302,7 @@ public:
 
                 // stopnie przesteru
                 v = s.pre.process(v);
+                const float vPre = v;
                 v = std::tanh(g1 * v + bias) - std::tanh(bias);
                 v = s.inter1.process(v);
                 v *= g2;
@@ -280,6 +313,12 @@ public:
                 float folded = std::sin(v * kPi * 0.5f * (1.f + fold * 3.f)) * rail;
                 v = hard + fold * (folded - hard);
                 v *= makeup;
+                if (p.soft > 0.001f) {
+                    float w = gs * vPre + 0.25f * bias;
+                    float sv = std::tanh(w) * 0.75f + 0.25f * w / (1.f + std::fabs(w));
+                    sv = s.softLp.process(sv) * 1.15f;
+                    v += p.soft * (sv - v);
+                }
 
                 // bramka-rozpad (velcro / zdychająca bateria)
                 if (gateOn) {
@@ -326,6 +365,25 @@ public:
                 v = s.lowS.process(v);
                 v = s.highS.process(v);
                 v = s.post.process(v);
+                // pełnia: dół + podoktawa śledząca grę
+                if (p.body > 0.001f) {
+                    v = s.bodyS.process(v);
+                    float sb = s.subLp.process((float)s.sub) * clampf(s.envIn * 7.f, 0.f, 1.f);
+                    v += p.body * 0.45f * sb;
+                }
+                // mgła (narastanie nut)
+                if (p.swell > 0.001f) v *= 1.f - p.swell + p.swell * s.swellG * s.swellG;
+                // chorus: trzy głosy, kanały w przeciwnych fazach
+                if (p.chorus > 0.001f) {
+                    s.cd.push(v);
+                    s.cph += 2.f * kPi * chHz / sr; if (s.cph > 2.f * kPi) s.cph -= 2.f * kPi;
+                    float acc = 0;
+                    for (int k = 0; k < 3; ++k) {
+                        float ph = s.cph + (float)k * 2.094f + (float)c * kPi * 0.5f;
+                        acc += s.cd.tap(msS * (11.f + 3.f * (float)k + (2.f + 4.f * p.chorus) * (1.f + std::sin(ph))));
+                    }
+                    v = v * (1.f - 0.45f * p.chorus) + acc * (0.33f * p.chorus) * 1.1f;
+                }
                 // śpiewający pogłos
                 if (revOn) {
                     float tail = reverbTick(s.rv, v * 0.5f, dampC, p.choir, shWin);
@@ -338,8 +396,11 @@ public:
                         sg = tail + p.sing * (f - tail);
                     }
                     s.revLast = sg;
-                    v += p.reverb * 1.4f * sg;
+                    v = v * (1.f - 0.35f * p.reverb * p.reverb) + p.reverb * (1.f + 1.6f * p.reverb) * sg;
                 }
+                // pogłos 2 i 3 w szeregu: każdy dostaje to, co wyszło z poprzedniego
+                if (rev2On) { float t2 = reverbTick(s.rv2, v * 0.5f, damp2, 0.f, shWin); v = v * (1.f - 0.3f * p.rev2 * p.rev2) + p.rev2 * (1.f + 1.4f * p.rev2) * t2; }
+                if (rev3On) { float t3 = reverbTick(s.rv3, v * 0.5f, damp3, 0.f, shWin); v = v * (1.f - 0.3f * p.rev3 * p.rev3) + p.rev3 * (1.2f + 1.6f * p.rev3) * t3; }
                 // DC
                 float y = v - s.dcX + 0.9995f * s.dcY; s.dcX = v; s.dcY = y;
                 y *= outG;
@@ -354,7 +415,9 @@ private:
     struct Chan {
         Biquad inHp, pre, inter1, inter2, f1, f2, fbHp, crackBp, lowS, highS, post;
         Biquad trk, howlBp, sf1, sf2, sf3, sr1, sr2, sr3;
-        Reverb rv;
+        Reverb rv, rv2, rv3;
+        Biquad softLp, bodyS, subLp; Delay cd;
+        float sub = 1.f, envF = 0, envS = 0, swellG = 1.f, cph = 0; int sinceOn = 0;
         float envIn = 0, trackF = 110.f, bloom = 0, H = 2.f, revLast = 0, vib = 0, vph = 0;
         int zc = 0, sinceX = 0; uint32_t slowCnt = 0;
         std::vector<float> fb; size_t fbPos = 0;
@@ -364,7 +427,8 @@ private:
             for (Biquad* b : {&inHp, &pre, &inter1, &inter2, &f1, &f2, &fbHp, &crackBp, &lowS, &highS, &post}) b->reset();
             std::fill(fb.begin(), fb.end(), 0.f); env = 0; dcX = dcY = 0; octX = octY = 0;
             for (Biquad* b : {&trk, &howlBp, &sf1, &sf2, &sf3, &sr1, &sr2, &sr3}) b->reset();
-            rv.clear(); revLast = 0; bloom = 0;
+            rv.clear(); rv2.clear(); rv3.clear(); revLast = 0; bloom = 0; cd.clear();
+            for (Biquad* b : {&softLp, &bodyS, &subLp}) b->reset();
         }
     };
 

@@ -16,10 +16,19 @@ static const ParamDef kDefs[StonogaProcessor::kNumParams] = {
     {"howl",     "Wycie",                 &stonoga::Params::howl,     0.f, 1.f},
     {"revfb",    "Pętla pogłosu",         &stonoga::Params::revfb,    0.f, 1.f},
     {"mix",      "Mix",                   &stonoga::Params::mix,      0.f, 1.f},
-    {"reverb",   "Pogłos",                &stonoga::Params::reverb,   0.f, 1.f},
-    {"size",     "Rozmiar pogłosu",       &stonoga::Params::size,     0.f, 1.f},
+    {"reverb",   "Pogłos 1 (śpiew)",      &stonoga::Params::reverb,   0.f, 1.f},
+    {"size",     "Rozmiar 1",             &stonoga::Params::size,     0.f, 1.f},
     {"sing",     "Śpiew",                 &stonoga::Params::sing,     0.f, 1.f},
     {"choir",    "Chór",                  &stonoga::Params::choir,    0.f, 1.f},
+    {"soft",     "Miękkość",              &stonoga::Params::soft,     0.f, 1.f},
+    {"body",     "Pełnia",                &stonoga::Params::body,     0.f, 1.f},
+    {"swell",    "Mgła",                  &stonoga::Params::swell,    0.f, 1.f},
+    {"chorus",   "Chorus",                &stonoga::Params::chorus,   0.f, 1.f},
+    {"chrate",   "Tempo chorusa",         &stonoga::Params::chRate,   0.f, 1.f},
+    {"rev2",     "Pogłos 2 (jasny)",      &stonoga::Params::rev2,     0.f, 1.f},
+    {"size2",    "Rozmiar 2",             &stonoga::Params::size2,    0.f, 1.f},
+    {"rev3",     "Pogłos 3 (otchłań)",    &stonoga::Params::rev3,     0.f, 1.f},
+    {"size3",    "Rozmiar 3",             &stonoga::Params::size3,    0.f, 1.f},
     {"output",   "Wyjście (dB)",          &stonoga::Params::outDb,  -40.f, 6.f},
 };
 
@@ -157,7 +166,7 @@ public:
         for (int i = 0; i < StonogaProcessor::kNumParams; ++i)
         {
             auto* s = sliders.add (new juce::Slider (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow));
-            s->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 18);
+            s->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 64, 16);
             addAndMakeVisible (s);
             auto* l = labels.add (new juce::Label());
             if (auto* prm = p.apvts.getParameter (StonogaProcessor::paramId (i)))
@@ -172,7 +181,7 @@ public:
         presets.setTextWhenNothingSelected (juce::String::fromUTF8 ("Presety…"));
         presets.onChange = [this] { const int id = presets.getSelectedId(); if (id > 0) proc.setCurrentProgram (id - 1); };
         addAndMakeVisible (presets);
-        setSize (760, 640);
+        setSize (760, 700);
     }
     ~Editor() override { setLookAndFeel (nullptr); }
 
@@ -199,11 +208,11 @@ public:
     void resized() override
     {
         presets.setBounds (getWidth() - 250, 26, 220, 28);
-        const int cols = 7, w = 100, h = 170, x0 = 30, y0 = 90;
+        const int cols = 8, w = 88, h = 150, x0 = 26, y0 = 86;
         for (int i = 0; i < sliders.size(); ++i)
         {
             const int row = i / cols, col = i % cols;
-            const int x = x0 + col * w + (row == 2 ? w : 0), y = y0 + row * h;
+            const int x = x0 + col * w, y = y0 + row * h;
             labels[i]->setBounds (x - 4, y, w + 8, 34);
             sliders[i]->setBounds (x, y + 30, w, h - 40);
         }

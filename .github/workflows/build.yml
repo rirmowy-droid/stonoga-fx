@@ -1,0 +1,24 @@
+name: Build Stonoga FX
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+      - name: Upload VST3 + Standalone
+        uses: actions/upload-artifact@v4
+        with:
+          name: StonogaFX-${{ runner.os }}
+          path: |
+            build/StonogaFX_artefacts/Release/VST3/
+            build/StonogaFX_artefacts/Release/Standalone/
